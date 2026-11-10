@@ -2,7 +2,6 @@ package prom
 
 import (
 	"math"
-	"strings"
 
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/storage"
@@ -27,20 +26,7 @@ func isHistogram(data []series) bool {
 }
 
 func keyHistogram(lb labels.Labels) (string, string) {
-	v := new(strings.Builder)
-	le := ""
-
-	lb.Range(func(l labels.Label) {
-		if l.Name == "le" {
-			le = l.Value
-			return
-		}
-		v.WriteString(l.Name)
-		v.WriteByte('=')
-		v.WriteString(l.Value)
-	})
-
-	return v.String(), le
+	return labelsMapKey(labels.NewBuilder(lb).Del("le").Labels()), lb.Get("le")
 }
 
 func hackSingleHistogram(h []*series, hints *storage.SelectHints) {

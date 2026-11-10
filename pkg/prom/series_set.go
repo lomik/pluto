@@ -1,15 +1,13 @@
 package prom
 
 import (
-	"log"
 	"sort"
-
-	"github.com/prometheus/prometheus/util/annotations"
 
 	"github.com/prometheus/prometheus/model/histogram"
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/storage"
 	"github.com/prometheus/prometheus/tsdb/chunkenc"
+	"github.com/prometheus/prometheus/util/annotations"
 )
 
 type sample struct {
@@ -82,6 +80,9 @@ func newLabelsSeriesSet(metrics []labels.Labels) storage.SeriesSet {
 // Seek advances the iterator forward to the value at or after
 // the given timestamp.
 func (sit *seriesIterator) Seek(t int64) chunkenc.ValueType {
+	if sit.current < 0 {
+		sit.current = 0
+	}
 	for ; sit.current < len(sit.series.samples); sit.current++ {
 		if sit.series.samples[sit.current].timestamp >= t {
 			return chunkenc.ValFloat
@@ -101,22 +102,14 @@ func (sit *seriesIterator) At() (t int64, v float64) {
 	return p.timestamp, p.value
 }
 
-// AtHistogram returns the current timestamp/value pair if the value is
-// a histogram with integer counts. Before the iterator has advanced,
-// the behaviour is unspecified.
-func (sit *seriesIterator) AtHistogram(histogram *histogram.Histogram) (int64, *histogram.Histogram) {
-	log.Fatal("seriesIterator.AtHistogram not implemented")
-	return 0, nil // @TODO
+// AtHistogram cannot be used on a float series.
+func (sit *seriesIterator) AtHistogram(*histogram.Histogram) (int64, *histogram.Histogram) {
+	panic("cannot call seriesIterator.AtHistogram for float samples")
 }
 
-// AtFloatHistogram returns the current timestamp/value pair if the
-// value is a histogram with floating-sample counts. It also works if the
-// value is a histogram with integer counts, in which case a
-// FloatHistogram copy of the histogram is returned. Before the iterator
-// has advanced, the behaviour is unspecified.
-func (sit *seriesIterator) AtFloatHistogram(histogram *histogram.FloatHistogram) (int64, *histogram.FloatHistogram) {
-	log.Fatal("seriesIterator.AtFloatHistogram not implemented")
-	return 0, nil // @TODO
+// AtFloatHistogram cannot be used on a float series.
+func (sit *seriesIterator) AtFloatHistogram(*histogram.FloatHistogram) (int64, *histogram.FloatHistogram) {
+	panic("cannot call seriesIterator.AtFloatHistogram for float samples")
 }
 
 // AtT returns the current timestamp.
@@ -132,6 +125,7 @@ func (sit *seriesIterator) Next() chunkenc.ValueType {
 		sit.current++
 		return chunkenc.ValFloat
 	}
+	sit.current = len(sit.series.samples)
 	return chunkenc.ValNone
 }
 
