@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"net/http/pprof"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/lomik/pluto/pkg/config"
 	"github.com/lomik/pluto/pkg/insert"
@@ -42,7 +44,20 @@ func main() {
 	// set log level from config
 	logLevel.Set(cfg.Logging.Level)
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	httpManager := listen.NewHTTP()
+	if err := registerRoutes(ctx, cfg, httpManager); err != nil {
+		log.Fatal(err)
+	}
+
+	if err := httpManager.Run(ctx); err != nil && ctx.Err() == nil {
+		log.Fatal(err)
+	}
+}
+
+func registerRoutes(ctx context.Context, cfg *config.Config, httpManager *listen.HTTP) error {
 	// receiver
 	if cfg.Insert.Enabled {
 		slog.Info("insert enabled", slog.String("listen", cfg.Insert.Listen))
@@ -80,9 +95,6 @@ func main() {
 
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
 	// prometheus
 	if cfg.Prometheus.Enabled {
 		slog.Info("prometheus enabled", slog.String("listen", cfg.Prometheus.Listen))
@@ -90,16 +102,11 @@ func main() {
 
 		p, err := prom.New(ctx, cfg)
 		if err != nil {
-			log.Fatal(err)
+			return err
 		}
 
 		p.Register(mux)
 	}
 
-	go func() {
-		listenErr := httpManager.Run(ctx)
-		log.Fatal(listenErr)
-	}()
-
-	<-ctx.Done()
+	return nil
 }
