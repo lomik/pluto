@@ -2,8 +2,10 @@ package config
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/expr-lang/expr/vm"
@@ -17,7 +19,7 @@ type ConfigWhen struct {
 }
 
 type ClickHouse struct {
-	DSN    string            `yaml:"dsn" validate:"uri" default:"http://127.0.0.1:8123/?async_insert=1&wait_for_async_insert=1"`
+	DSN    string            `yaml:"dsn" validate:"omitempty,uri" default:"http://127.0.0.1:8123/?async_insert=1&wait_for_async_insert=1"`
 	Params map[string]string `yaml:"params"`
 }
 
@@ -87,17 +89,17 @@ type Config struct {
 	OverrideInsert []struct {
 		ConfigInsert `yaml:",inline"`
 		ConfigWhen   `yaml:",inline"`
-	} `yaml:"override_insert"`
+	} `yaml:"override_insert" validate:"dive"`
 
 	OverrideSeries []struct {
 		ConfigSeries `yaml:",inline"`
 		ConfigWhen   `yaml:",inline"`
-	} `yaml:"override_series"`
+	} `yaml:"override_series" validate:"dive"`
 
 	OverrideSamples []struct {
 		ConfigSamples `yaml:",inline"`
 		ConfigWhen    `yaml:",inline"`
-	} `yaml:"override_samples"`
+	} `yaml:"override_samples" validate:"dive"`
 
 	Extension struct {
 		ClickHouseDiscovery func(ctx context.Context, dsn string) (string, error)
@@ -107,7 +109,15 @@ type Config struct {
 
 // Validate ...
 func (cfg *Config) Validate() error {
-	return validator.New(validator.WithRequiredStructEnabled()).Struct(cfg)
+	validate := validator.New(validator.WithRequiredStructEnabled())
+	if err := validate.Struct(cfg); err != nil {
+		return err
+	}
+	// An override may inherit the base DSN, but the base itself must have one.
+	if cfg.ClickHouse.DSN == "" {
+		return fmt.Errorf("clickhouse.dsn is required")
+	}
+	return nil
 }
 
 // Compile ...
@@ -148,6 +158,9 @@ func (cfg *Config) Compile() error {
 
 // LoadFromFile ...
 func LoadFromFile(filename string) (*Config, error) {
+	if _, err := os.Stat(filename); err != nil {
+		return nil, err
+	}
 	cfg := Config{}
 
 	if err := configor.Load(&cfg, filename); err != nil {
