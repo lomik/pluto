@@ -6,8 +6,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
-	"time"
 
 	"github.com/lomik/pluto/pkg/config"
 	"github.com/stretchr/testify/assert"
@@ -109,12 +109,8 @@ func TestRequestResponseStatusNotOK(t *testing.T) {
 	assert.NoError(err)
 	defer req.Close()
 
-	time.Sleep(100 * time.Millisecond)
-
 	_, err = fmt.Fprint(req, "Hello, server")
 	assert.NoError(err)
-
-	time.Sleep(100 * time.Millisecond)
 
 	resp, err := req.Finish()
 	assert.Nil(resp)
@@ -147,12 +143,8 @@ func TestRequestBadRequest(t *testing.T) {
 	assert.NoError(err)
 	defer req.Close()
 
-	time.Sleep(100 * time.Millisecond)
-
 	_, err = fmt.Fprint(req, "Hello, server")
 	assert.NoError(err)
-
-	time.Sleep(100 * time.Millisecond)
 
 	resp, err := req.Finish()
 	assert.Nil(resp)
@@ -163,14 +155,20 @@ func TestRequestAbortConnection(t *testing.T) {
 	t.Parallel()
 
 	assert := assert.New(t)
+	closeConnection := make(chan struct{})
+	var closeOnce sync.Once
+	releaseConnection := func() { closeOnce.Do(func() { close(closeConnection) }) }
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, err := io.ReadAll(r.Body)
 		assert.NoError(err)
+		w.Header().Set("Content-Length", "100")
 		fmt.Fprint(w, "Hello, client")
-		time.Sleep(time.Second)
+		w.(http.Flusher).Flush()
+		<-closeConnection
 	}))
 	defer ts.Close()
+	defer releaseConnection()
 
 	req, err := NewRequest(context.Background(),
 		config.ClickHouse{DSN: fmt.Sprintf("http://%s", ts.Listener.Addr().String())},
@@ -180,31 +178,24 @@ func TestRequestAbortConnection(t *testing.T) {
 	assert.NoError(err)
 	defer req.Close()
 
-	time.Sleep(100 * time.Millisecond)
-
 	_, err = fmt.Fprint(req, "Hello, server")
 	assert.NoError(err)
-
-	time.Sleep(100 * time.Millisecond)
 
 	resp, err := req.Finish()
 	assert.NotNil(resp)
 	assert.NoError(err)
 
-	go func() {
-		time.Sleep(100 * time.Second)
-		ts.CloseClientConnections()
-	}()
-
+	releaseConnection()
 	respBody, err := io.ReadAll(resp)
 	assert.Equal("Hello, client", string(respBody))
-	assert.NoError(err)
+	assert.ErrorIs(err, io.ErrUnexpectedEOF)
 }
 
 func TestCancelByContext(t *testing.T) {
 	t.Parallel()
 
 	assert := assert.New(t)
+	responseFlushed := make(chan struct{})
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		assert.NoError(err)
@@ -222,12 +213,12 @@ func TestCancelByContext(t *testing.T) {
 
 		fmt.Fprint(w, "Hello, client")
 		flusher.Flush()
-
-		time.Sleep(time.Second)
+		close(responseFlushed)
+		<-r.Context().Done()
 	}))
 	defer ts.Close()
 
-	ctx, ctxCancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	ctx, ctxCancel := context.WithCancel(context.Background())
 	defer ctxCancel()
 
 	req, err := NewRequest(ctx,
@@ -246,6 +237,8 @@ func TestCancelByContext(t *testing.T) {
 	resp, err := req.Finish()
 	assert.NoError(err)
 
+	<-responseFlushed
+	ctxCancel()
 	_, err = io.ReadAll(resp)
 	assert.Error(err)
 }
