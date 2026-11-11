@@ -2,7 +2,9 @@ package where
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
 var (
@@ -11,108 +13,87 @@ var (
 
 // clearGlob cleanup grafana globs like {name}
 func clearGlob(query string) string {
-	p := 0
-	s := strings.IndexAny(query, "{[")
-	if s == -1 {
-		return query
-	}
-
-	found := false
 	var builder strings.Builder
-
-	for {
-		var e int
-		if query[s] == '{' {
-			e = strings.IndexAny(query[s:], "}.")
-			if e == -1 || query[s+e] == '.' {
-				// { not closed, glob with error
-				break
+	for i := 0; i < len(query); i++ {
+		if query[i] == '\\' {
+			builder.WriteByte(query[i])
+			if i+1 < len(query) {
+				i++
+				builder.WriteByte(query[i])
 			}
-			e += s + 1
-			delim := strings.IndexRune(query[s+1:e], ',')
-			if delim == -1 {
-				if !found {
-					builder.Grow(len(query) - 2)
-					found = true
-				}
-				builder.WriteString(query[p:s])
-				builder.WriteString(query[s+1 : e-1])
-				p = e
-			}
-		} else {
-			e = strings.IndexAny(query[s+1:], "].")
-			if e == -1 || query[s+e] == '.' {
-				// [ not closed, glob with error
-				break
-			} else {
-				symbols := 0
-				for _, c := range query[s+1 : s+e+1] {
-					_ = c // for loop over runes
-					symbols++
-					if symbols == 2 {
-						break
-					}
-				}
-				if symbols <= 1 {
-					if !found {
-						builder.Grow(len(query) - 2)
-						found = true
-					}
-					builder.WriteString(query[p:s])
-					builder.WriteString(query[s+1 : s+e+1])
-					p = e + s + 2
+			continue
+		}
+		if query[i] == '{' {
+			end := strings.IndexByte(query[i+1:], '}')
+			if end >= 0 {
+				content := query[i+1 : i+end+1]
+				if !strings.ContainsAny(content, ",.{}") && !strings.Contains(content, `\`) {
+					builder.WriteString(content)
+					i += end + 1
+					continue
 				}
 			}
-			e += s + 2
+		} else if query[i] == '[' {
+			end := strings.IndexByte(query[i+1:], ']')
+			if end >= 0 {
+				content := query[i+1 : i+end+1]
+				if len([]rune(content)) <= 1 && !strings.Contains(content, `\`) {
+					builder.WriteString(content)
+					i += end + 1
+					continue
+				}
+			}
 		}
-
-		if e >= len(query) {
-			break
-		}
-		s = strings.IndexAny(query[e:], "{[")
-		if s == -1 {
-			break
-		}
-		s += e
+		builder.WriteByte(query[i])
 	}
-
-	if found {
-		if p < len(query) {
-			builder.WriteString(query[p:])
-		}
-		return builder.String()
-	}
-	return query
+	return builder.String()
 }
 
 func glob(field string, query string, optionalDotAtEnd bool) string {
 	if query == "*" {
 		return ""
 	}
+	if !utf8.ValidString(query) {
+		// Malformed UTF-8 cannot form a valid regular expression. Avoid
+		// emitting a query that fails to compile on the server.
+		return "0"
+	}
 
 	query = clearGlob(query)
 
-	if !HasWildcard(query) {
-		if optionalDotAtEnd {
-			return In(field, []string{query, query + "."})
-		} else {
-			return Eq(field, query)
+	// A backslash before a glob metacharacter quotes that character;
+	// otherwise it remains a literal backslash for compatibility.
+	var literal strings.Builder
+	var prefix strings.Builder
+	wildcard := false
+	for i := 0; i < len(query); i++ {
+		if query[i] == '\\' && i+1 < len(query) && strings.ContainsRune(`*?{}[],.\\`, rune(query[i+1])) {
+			i++
+			literal.WriteByte(query[i])
+			if !wildcard {
+				prefix.WriteByte(query[i])
+			}
+			continue
+		}
+		if strings.ContainsRune("[]{}*?", rune(query[i])) {
+			wildcard = true
+		}
+		literal.WriteByte(query[i])
+		if !wildcard {
+			prefix.WriteByte(query[i])
 		}
 	}
 
-	w := New()
+	if !wildcard {
+		if optionalDotAtEnd {
+			return In(field, []string{literal.String(), literal.String() + "."})
+		} else {
+			return Eq(field, literal.String())
+		}
+	}
 
 	// before any wildcard symbol
-	simplePrefix := query[:strings.IndexAny(query, "[]{}*?")]
-
-	if len(simplePrefix) > 0 {
-		w.And(HasPrefix(field, simplePrefix))
-	}
-
-	// prefix search like "metric.name.xx*"
-	if len(simplePrefix) == len(query)-1 && query[len(query)-1] == '*' {
-		return HasPrefix(field, simplePrefix)
-	}
+	simplePrefix := prefix.String()
 
 	// Q() replaces \ with \\, so using \. does not work here.
 	// work around with [.]
@@ -142,6 +123,9 @@ func TreeGlob(field string, query string) string {
 }
 
 func ConcatMatchKV(key, value string) string {
+	if value == "" {
+		return key + opEq + `\\%`
+	}
 	startLine := value[0] == '^'
 	endLine := value[len(value)-1] == '$'
 	if startLine && endLine {
@@ -153,23 +137,37 @@ func ConcatMatchKV(key, value string) string {
 }
 
 func Match(field string, key, value string) string {
+	if !utf8.ValidString(key) || !utf8.ValidString(value) {
+		return "0"
+	}
 	if len(value) == 0 || value == "*" {
-		return Like(field, key+"=%")
+		return Like(field, likeEscape(key+"=")+"%")
+	}
+	// An exact match needs no regex, even when the key includes characters
+	// special to regular expressions.
+	if strings.HasPrefix(value, "^") && strings.HasSuffix(value, "$") &&
+		len(value) >= 2 && regexp.QuoteMeta(value[1:len(value)-1]) == value[1:len(value)-1] {
+		return Eq(field, key+"="+value[1:len(value)-1])
 	}
 	expr := ConcatMatchKV(key, value)
 	simplePrefix := NonRegexpPrefix(expr)
-	if len(simplePrefix) == len(expr) {
-		return Eq(field, expr)
-	} else if len(simplePrefix) == len(expr)-1 && expr[len(expr)-1] == '$' {
-		return Eq(field, simplePrefix)
+	if strings.Contains(value, "|") {
+		// Alternatives are scoped to the value by quoteRegex; neither
+		// alternative is guaranteed to start with the other one's prefix.
+		simplePrefix = key + opEq
 	}
-
-	if simplePrefix == "" {
-		return fmt.Sprintf("match(%s, %s)", field, quoteRegex(key, value))
+	quotedRegexp, valid := quoteRegex(key, value)
+	if !valid {
+		// A malformed regex must not become a different, literal search or
+		// cause ClickHouse to reject the entire query.
+		return "0"
 	}
-
-	return fmt.Sprintf("%s AND match(%s, %s)",
-		HasPrefix(field, simplePrefix),
-		field, quoteRegex(key, value),
-	)
+	regexSQL := fmt.Sprintf("match(%s, %s)", field, quotedRegexp)
+	// A regex prefix extracted from a key containing metacharacters, or
+	// from an unanchored value, may exclude valid matches. In those cases
+	// rely on the regex alone rather than an unsafe LIKE prefilter.
+	if !strings.HasPrefix(value, "^") || len(simplePrefix) < len(key)+1 {
+		return regexSQL
+	}
+	return HasPrefix(field, simplePrefix) + " AND " + regexSQL
 }

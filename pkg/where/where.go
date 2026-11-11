@@ -53,15 +53,59 @@ func GlobExpandSimple(value, prefix string, result *[]string) error {
 }
 
 func GlobToRegexp(g string) string {
-	s := g
-	s = strings.ReplaceAll(s, ".", "[.]")
-	s = strings.ReplaceAll(s, "$", "[$]")
-	s = strings.ReplaceAll(s, "{", "(")
-	s = strings.ReplaceAll(s, "}", ")")
-	s = strings.ReplaceAll(s, "?", "[^.]")
-	s = strings.ReplaceAll(s, ",", "|")
-	s = strings.ReplaceAll(s, "*", "([^.]*?)")
-	return s
+	var b strings.Builder
+	for i := 0; i < len(g); i++ {
+		switch g[i] {
+		case '*':
+			b.WriteString("([^.]*?)")
+		case '?':
+			b.WriteString("[^.]")
+		case '.':
+			b.WriteString("[.]")
+		case '$':
+			b.WriteString("[$]")
+		case '\\':
+			if i+1 < len(g) && strings.ContainsRune(`*?{}[],.\\`, rune(g[i+1])) {
+				i++
+				b.WriteString(regexp.QuoteMeta(g[i : i+1]))
+			} else {
+				b.WriteString(`\\`)
+			}
+		case '[':
+			end := strings.IndexByte(g[i+1:], ']')
+			if end >= 0 {
+				class := g[i : i+end+2]
+				if _, err := regexp.Compile(class); err == nil {
+					b.WriteString(class)
+					i += end + 1
+					continue
+				}
+			}
+			b.WriteString(`\[`)
+		case ']':
+			b.WriteString(`\]`)
+		case '{':
+			end := strings.IndexByte(g[i+1:], '}')
+			if end >= 0 && strings.Contains(g[i+1:i+end+1], ",") && !strings.ContainsAny(g[i+1:i+end+1], "{}\\") {
+				b.WriteByte('(')
+				for j, choice := range strings.Split(g[i+1:i+end+1], ",") {
+					if j > 0 {
+						b.WriteByte('|')
+					}
+					b.WriteString(GlobToRegexp(choice))
+				}
+				b.WriteByte(')')
+				i += end + 1
+			} else {
+				b.WriteString(`\{`)
+			}
+		case '}':
+			b.WriteString(`\}`)
+		default:
+			b.WriteString(regexp.QuoteMeta(g[i : i+1]))
+		}
+	}
+	return b.String()
 }
 
 func HasWildcard(target string) bool {
@@ -77,15 +121,21 @@ func IndexWildcard(target string) int {
 }
 
 func NonRegexpPrefix(expr string) string {
-	s := regexp.QuoteMeta(expr)
-	for i := 0; i < len(expr); i++ {
-		if expr[i] != s[i] || expr[i] == '\\' {
-			if len(expr) > i+1 && expr[i] == '|' {
-				eq := strings.LastIndexAny(expr[:i], "=~")
-				if eq > 0 {
-					return expr[:eq+1]
-				}
+	// Match scopes alternatives to the value, so a | in the value can
+	// invalidate a prefix discovered before another regex metacharacter.
+	// Preserve the key/equals portion in that case.
+	if strings.Contains(expr, "|") {
+		eq := strings.IndexByte(expr, '=')
+		if eq >= 0 {
+			if eq+1 < len(expr) && expr[eq+1] == '~' {
+				eq++
 			}
+			return expr[:eq+1]
+		}
+		return ""
+	}
+	for i := 0; i < len(expr); i++ {
+		if strings.ContainsRune(`\\.+*?()[]{}^$`, rune(expr[i])) {
 			return expr[:i]
 		}
 	}
@@ -98,18 +148,13 @@ func escape(s string) string {
 	return s
 }
 
-func escapeRegex(s string) string {
-	s = escape(s)
-	if strings.Contains(s, "|") {
-		s = "(" + s + ")"
-	}
-	return s
-}
-
 func likeEscape(s string) string {
-	s = strings.ReplaceAll(s, `_`, `\_`)
-	s = strings.ReplaceAll(s, `%`, `\%`)
-	s = strings.ReplaceAll(s, `\`, `\\`)
+	// LIKE consumes one level of escaping after the SQL string literal is
+	// decoded. Original backslashes need escaping at both levels; wildcard
+	// escapes only need escaping for the SQL string literal.
+	s = strings.ReplaceAll(s, `\`, `\\\\`)
+	s = strings.ReplaceAll(s, `_`, `\\_`)
+	s = strings.ReplaceAll(s, `%`, `\\%`)
 	s = strings.ReplaceAll(s, `'`, `\'`)
 	return s
 }
@@ -127,12 +172,20 @@ func quote(value interface{}) string {
 	}
 }
 
-func quoteRegex(key, value string) string {
-	startLine := value[0] == '^'
-	if startLine {
-		return fmt.Sprintf("'^%s%s%s'", key, opEq, escapeRegex(value[1:]))
+func quoteRegex(key, value string) (string, bool) {
+	pattern := `^` + regexp.QuoteMeta(key) + opEq
+	if strings.HasPrefix(value, "^") {
+		value = value[1:]
+	} else {
+		pattern += `.*`
 	}
-	return fmt.Sprintf("'^%s%s.*%s'", key, opEq, escapeRegex(value))
+	if strings.Contains(value, "|") {
+		value = "(" + value + ")"
+	}
+	if _, err := regexp.Compile(pattern + value); err != nil {
+		return "", false
+	}
+	return quote(pattern + value), true
 }
 
 func Like(field, s string) string {
