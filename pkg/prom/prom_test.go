@@ -12,6 +12,7 @@ import (
 
 	"github.com/golang/snappy"
 	"github.com/lomik/pluto/pkg/config"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/prometheus/prompb"
 )
 
@@ -52,6 +53,15 @@ func Test_joinPrefix(t *testing.T) {
 }
 
 func TestRemoteReadUsesConfiguredConcurrencyLimit(t *testing.T) {
+	// New registers scrape metrics globally. Keep this test serial and isolate
+	// the registry so repeated runs do not leave duplicate collectors behind.
+	oldRegisterer, oldGatherer := prometheus.DefaultRegisterer, prometheus.DefaultGatherer
+	registry := prometheus.NewRegistry()
+	prometheus.DefaultRegisterer, prometheus.DefaultGatherer = registry, registry
+	t.Cleanup(func() {
+		prometheus.DefaultRegisterer, prometheus.DefaultGatherer = oldRegisterer, oldGatherer
+	})
+
 	cfg := &config.Config{}
 	cfg.Prometheus.ExternalURL = "http://example.test"
 	cfg.Prometheus.RoutePrefix = "/"
