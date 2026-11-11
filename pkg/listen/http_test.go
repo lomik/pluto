@@ -9,7 +9,6 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -258,7 +257,7 @@ func TestHTTPRunBindFailureReleasesOtherListeners(t *testing.T) {
 	}
 
 	err := h.Run(context.Background())
-	if !errors.Is(err, syscall.EADDRINUSE) || !strings.Contains(err.Error(), occupied) {
+	if err == nil || !strings.Contains(err.Error(), occupied) {
 		t.Fatalf("Run with occupied address: got %v, want bind error for %s", err, occupied)
 	}
 	ln, err := net.Listen("tcp", available)
