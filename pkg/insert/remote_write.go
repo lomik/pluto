@@ -1,6 +1,7 @@
 package insert
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -27,7 +28,7 @@ func NewPrometheusRemoteWrite(opts Opts) *PrometheusRemoteWrite {
 
 func (rcv *PrometheusRemoteWrite) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if rcv.opts.Config.Insert.CloseConnections {
-		w.Header().Add("Connection", "close")
+		w.Header().Set("Connection", "close")
 	}
 
 	reqCompressed, err := io.ReadAll(r.Body)
@@ -41,6 +42,11 @@ func (rcv *PrometheusRemoteWrite) ServeHTTP(w http.ResponseWriter, r *http.Reque
 	if err != nil {
 		slog.ErrorContext(r.Context(), "can't decode prometheus request", lg.Error(err))
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := validatePayload(reqRaw, writeRequestMessage); err != nil {
+		slog.ErrorContext(r.Context(), "invalid prometheus request", lg.Error(err))
+		http.Error(w, fmt.Sprintf("%v: %v", errInvalidPayload, err), http.StatusBadRequest)
 		return
 	}
 
@@ -76,7 +82,11 @@ func (rcv *PrometheusRemoteWrite) ServeHTTP(w http.ResponseWriter, r *http.Reque
 
 	if err := payloadToRowBinary(reqRaw, chRequest, id.NewNameWithSha256()); err != nil {
 		slog.ErrorContext(r.Context(), "can't write request to clickhouse", lg.Error(err))
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		if errors.Is(err, errInvalidPayload) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
 
@@ -92,18 +102,5 @@ func (rcv *PrometheusRemoteWrite) ServeHTTP(w http.ResponseWriter, r *http.Reque
 		slog.ErrorContext(r.Context(), "can't close response from clickhouse", lg.Error(err))
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
-	}
-
-	if rcv.opts.Config.Insert.CloseConnections {
-		hj, ok := w.(http.Hijacker)
-		if !ok {
-			return
-		}
-		conn, _, err := hj.Hijack()
-		if err != nil {
-			return
-		}
-
-		conn.Close()
 	}
 }

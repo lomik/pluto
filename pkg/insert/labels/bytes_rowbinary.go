@@ -23,19 +23,17 @@ func (t *typeColumnBytes) Read(r rb.Reader) ([]Bytes, error) {
 		return nil, err
 	}
 
-	ret := make([]Bytes, int(n))
+	ret := make([]Bytes, 0)
 	for i := uint64(0); i < n; i++ {
-		k, err := rb.String.Read(r)
+		k, err := readString(r)
 		if err != nil {
 			return nil, err
 		}
-		ret[i].Name = []byte(k)
-
-		v, err := rb.String.Read(r)
+		v, err := readString(r)
 		if err != nil {
 			return nil, err
 		}
-		ret[i].Value = []byte(v)
+		ret = append(ret, Bytes{Name: []byte(k), Value: []byte(v)})
 	}
 
 	return ret, nil

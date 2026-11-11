@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"maps"
@@ -28,6 +29,10 @@ var timeNow = time.Now
 
 // Select returns a set of series that matches the given label matchers.
 func (q *Querier) Select(ctx context.Context, sortSeries bool, selectHints *storage.SelectHints, labelsMatcher ...*labels.Matcher) storage.SeriesSet {
+	if selectHints == nil {
+		selectHints = &storage.SelectHints{Start: q.mint, End: q.maxt}
+	}
+
 	seriesMap, err := q.selectSeries(ctx, selectHints, labelsMatcher)
 	if err != nil {
 		slog.ErrorContext(ctx, "can't find series", lg.Error(err))
@@ -38,9 +43,13 @@ func (q *Querier) Select(ctx context.Context, sortSeries bool, selectHints *stor
 		return emptySeriesSet()
 	}
 
-	if selectHints != nil && selectHints.Func == "series" {
+	if selectHints.Func == "series" {
 		// /api/v1/series?match[]=...
-		return newLabelsSeriesSet(slices.Collect(maps.Values(seriesMap)))
+		data := slices.Collect(maps.Values(seriesMap))
+		if sortSeries {
+			slices.SortFunc(data, labels.Compare)
+		}
+		return newLabelsSeriesSet(data)
 	}
 
 	// select config with overrides
@@ -66,6 +75,12 @@ func (q *Querier) Select(ctx context.Context, sortSeries bool, selectHints *stor
 	if samplesCfg.SamplesTimestampUInt32 {
 		timestampDiv = 1000
 	}
+	step /= timestampDiv
+	if step <= 0 {
+		// A sub-second hint cannot produce sub-second buckets in a UInt32
+		// seconds column. Never send intDiv(..., 0) to ClickHouse.
+		step = 1
+	}
 
 	// fetch data by ids
 	qq, err := sql.Template(`
@@ -81,7 +96,7 @@ func (q *Querier) Select(ctx context.Context, sortSeries bool, selectHints *stor
 		"table":   samplesCfg.Table,
 		"start":   selectHints.Start / timestampDiv,
 		"end":     selectHints.End / timestampDiv,
-		"step":    step / timestampDiv,
+		"step":    step,
 	})
 	if err != nil {
 		slog.ErrorContext(ctx, "can't create request to clickhouse", lg.Error(err))
@@ -193,20 +208,29 @@ func (q *Querier) Select(ctx context.Context, sortSeries bool, selectHints *stor
 	var value float64
 
 	for r.Next() {
-		id, _ = unhash.SchemaRead(r)
+		id, err = unhash.SchemaRead(r)
+		if err != nil {
+			return errorSeriesSet(err)
+		}
 		if samplesCfg.SamplesTimestampUInt32 {
-			timestamp32, _ = schema.Read(r, rowbinary.UInt32)
+			timestamp32, err = schema.Read(r, rowbinary.UInt32)
 			timestamp = int64(timestamp32) * 1000
 		} else {
-			timestamp, _ = schema.Read(r, rowbinary.Int64)
+			timestamp, err = schema.Read(r, rowbinary.Int64)
 		}
-		value, _ = schema.Read(r, rowbinary.Float64)
-		if r.Err() != nil {
-			slog.ErrorContext(ctx, "can't read row from clickhouse", lg.Error(r.Err()))
-			return errorSeriesSet(r.Err())
+		if err != nil {
+			return errorSeriesSet(err)
+		}
+		value, err = schema.Read(r, rowbinary.Float64)
+		if err != nil {
+			return errorSeriesSet(err)
 		}
 
-		dataMap[id].sampleAppend(timestamp, value)
+		d := dataMap[id]
+		if d == nil {
+			return errorSeriesSet(fmt.Errorf("unknown series id %q", id))
+		}
+		d.sampleAppend(timestamp, value)
 	}
 
 	if r.Err() != nil {
@@ -220,6 +244,9 @@ func (q *Querier) Select(ctx context.Context, sortSeries bool, selectHints *stor
 			continue
 		}
 		data = append(data, *v)
+	}
+	if sortSeries {
+		slices.SortFunc(data, func(a, b series) int { return labels.Compare(a.labels, b.labels) })
 	}
 
 	ss, err := makeSeriesSet(data, selectHints)

@@ -29,9 +29,9 @@ func (q *Querier) whereMatchLabels(_ context.Context, cfg config.ConfigSeries, w
 		case labels.MatchNotEqual:
 			where.And(sql.Ne(column, sql.Quote(m.Value)))
 		case labels.MatchRegexp:
-			where.And(sql.Match(column, sql.Quote("^"+m.Value+"$")))
+			where.And(sql.Match(column, sql.Quote("^(?:"+m.Value+")$")))
 		case labels.MatchNotRegexp:
-			where.And(sql.Not(sql.Match(column, sql.Quote("^"+m.Value+"$"))))
+			where.And(sql.Not(sql.Match(column, sql.Quote("^(?:"+m.Value+")$"))))
 		}
 	}
 }

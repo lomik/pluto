@@ -19,19 +19,17 @@ func (t *typeColumnPrompb) Read(r rb.Reader) ([]prompb.Label, error) {
 		return nil, err
 	}
 
-	ret := make([]prompb.Label, int(n))
+	ret := make([]prompb.Label, 0)
 	for i := uint64(0); i < n; i++ {
-		k, err := rb.String.Read(r)
+		k, err := readString(r)
 		if err != nil {
 			return nil, err
 		}
-		ret[i].Name = k
-
-		v, err := rb.String.Read(r)
+		v, err := readString(r)
 		if err != nil {
 			return nil, err
 		}
-		ret[i].Value = v
+		ret = append(ret, prompb.Label{Name: k, Value: v})
 	}
 
 	return ret, nil

@@ -2,6 +2,7 @@ package prom
 
 import (
 	"context"
+	"errors"
 
 	"github.com/lomik/pluto/pkg/config"
 	"github.com/prometheus/prometheus/storage"
@@ -26,9 +27,10 @@ func (s *storageImpl) Querier(mint, maxt int64) (storage.Querier, error) {
 	}, nil
 }
 
-// ChunkQuerier ...
+// ChunkQuerier returns an error because streamed remote reads require chunk
+// support, while this storage exposes only sample iterators.
 func (s *storageImpl) ChunkQuerier(mint, maxt int64) (storage.ChunkQuerier, error) {
-	return nil, nil
+	return nil, errors.New("streamed remote read is not supported")
 }
 
 // Appender ...

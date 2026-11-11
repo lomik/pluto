@@ -66,7 +66,11 @@ func (h *hashSelector) SchemaRead(r *schema.Reader) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		return h.mp32[v], nil
+		id, ok := h.mp32[v]
+		if !ok {
+			return "", fmt.Errorf("unknown series hash %d", v)
+		}
+		return id, nil
 	}
 
 	return schema.Read(r, rowbinary.String)

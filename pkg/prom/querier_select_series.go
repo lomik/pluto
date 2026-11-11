@@ -77,7 +77,7 @@ func (q *Querier) selectSeries(ctx context.Context, selectHints *storage.SelectH
 		ret[id] = lb
 	}
 	if r.Err() != nil {
-		return nil, err
+		return nil, r.Err()
 	}
 
 	return ret, nil

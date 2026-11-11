@@ -3,6 +3,7 @@ package query
 import (
 	"bufio"
 	"context"
+	stderrors "errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -35,6 +36,8 @@ type Request struct {
 	sync.Mutex
 	ctx       context.Context
 	ctxCancel context.CancelFunc
+	writeMu   sync.Mutex
+	writeDone bool // guarded by writeMu
 	reader    *io.PipeReader
 	writer    *io.PipeWriter
 	writerBuf *bufio.Writer
@@ -50,8 +53,10 @@ type Request struct {
 
 // Response ...
 type Response struct {
-	ctx      context.Context
-	httpBody io.ReadCloser
+	ctx       context.Context
+	httpBody  io.ReadCloser
+	closeOnce sync.Once
+	closeErr  error
 
 	vars struct {
 		respBodyBytes int
@@ -69,7 +74,7 @@ func NewRequest(ctx context.Context, cfg config.ClickHouse, opts Opts) (*Request
 		}
 	}
 
-	u, err := url.Parse(cfg.DSN)
+	u, err := url.Parse(dsn)
 	if err != nil {
 		return nil, err
 	}
@@ -95,8 +100,10 @@ func NewRequest(ctx context.Context, cfg config.ClickHouse, opts Opts) (*Request
 	}
 
 	url := &url.URL{
-		Scheme: u.Scheme,
-		Host:   u.Host,
+		Scheme:  u.Scheme,
+		Host:    u.Host,
+		Path:    u.Path,
+		RawPath: u.RawPath,
 	}
 	values := url.Query()
 	headers := http.Header{}
@@ -159,17 +166,23 @@ func NewRequest(ctx context.Context, cfg config.ClickHouse, opts Opts) (*Request
 			req.Lock()
 			req.respErr = err
 			req.Unlock()
+			req.reader.CloseWithError(err)
 			return
 		}
 
 		if httpResp.StatusCode != http.StatusOK {
+			// A server can reject the request without reading its body. Unblock
+			// any Write/Flush before attempting to read the error response.
+			req.reader.CloseWithError(fmt.Errorf("http status code %d", httpResp.StatusCode))
 			body, bodyErr := io.ReadAll(httpResp.Body)
+			closeErr := httpResp.Body.Close()
 
 			if bodyErr != nil {
 				err = fmt.Errorf("http status code %d, but can't read response body: %s", httpResp.StatusCode, bodyErr.Error())
 			} else {
 				err = fmt.Errorf("http status code %d: %s", httpResp.StatusCode, string(body))
 			}
+			err = stderrors.Join(err, closeErr)
 			req.Lock()
 			req.respErr = err
 			req.Unlock()
@@ -179,6 +192,8 @@ func NewRequest(ctx context.Context, cfg config.ClickHouse, opts Opts) (*Request
 		req.Lock()
 		req.resp = &Response{ctx: ctx, httpBody: httpResp.Body}
 		req.Unlock()
+		// HTTP 200 headers can arrive before the upload completes. Keep the
+		// pipe open until Finish or Close so full-duplex uploads can continue.
 	}()
 
 	return req, nil
@@ -186,19 +201,52 @@ func NewRequest(ctx context.Context, cfg config.ClickHouse, opts Opts) (*Request
 
 // Write ...
 func (req *Request) Write(p []byte) (int, error) {
+	req.writeMu.Lock()
+	defer req.writeMu.Unlock()
+	if req.writeDone {
+		return 0, io.ErrClosedPipe
+	}
 	n, err := req.writerBuf.Write(p)
 	req.vars.reqBodyBytes += n
+	if err != nil {
+		req.Lock()
+		respErr := req.respErr
+		req.Unlock()
+		if respErr != nil {
+			return n, respErr
+		}
+	}
 	return n, err
 }
 
 func (req *Request) WriteByte(b byte) error {
-	req.vars.reqBodyBytes += 1
-	return req.writerBuf.WriteByte(b)
+	req.writeMu.Lock()
+	defer req.writeMu.Unlock()
+	if req.writeDone {
+		return io.ErrClosedPipe
+	}
+	err := req.writerBuf.WriteByte(b)
+	if err == nil {
+		req.vars.reqBodyBytes++
+	} else {
+		req.Lock()
+		respErr := req.respErr
+		req.Unlock()
+		if respErr != nil {
+			return respErr
+		}
+	}
+	return err
 }
 
 // Close ...
 func (req *Request) Close() error {
 	req.ctxCancel()
+	req.reader.CloseWithError(io.ErrClosedPipe)
+	req.writer.CloseWithError(io.ErrClosedPipe)
+	req.writeMu.Lock()
+	req.writeDone = true
+	req.writeMu.Unlock()
 
 	<-req.finished
 
@@ -208,11 +256,14 @@ func (req *Request) Close() error {
 	req.Unlock()
 
 	if err != nil {
+		if resp != nil {
+			resp.close(false)
+		}
 		return err
 	}
 
 	if resp != nil {
-		return resp.Close()
+		return resp.close(false)
 	}
 
 	return nil
@@ -220,22 +271,40 @@ func (req *Request) Close() error {
 
 // Finish finishes the request and starts reading the response
 func (req *Request) Finish() (*Response, error) {
+	req.writeMu.Lock()
+	defer req.writeMu.Unlock()
+	if req.writeDone {
+		return nil, io.ErrClosedPipe
+	}
+	req.writeDone = true
 
 	if err := req.writerBuf.Flush(); err != nil {
+		req.writer.CloseWithError(err)
+		req.reader.CloseWithError(err)
+		<-req.finished
 		// may be an error from the server
 		req.Lock()
 		respErr := req.respErr
+		resp := req.resp
 		req.Unlock()
+		if resp != nil {
+			resp.close(false)
+		}
 		if respErr != nil {
 			return nil, errors.WithStack(respErr)
 		}
 		return nil, errors.WithStack(err)
 	}
 	if err := req.writer.Close(); err != nil {
+		<-req.finished
 		// may be an error from the server
 		req.Lock()
 		respErr := req.respErr
+		resp := req.resp
 		req.Unlock()
+		if resp != nil {
+			resp.close(false)
+		}
 		if respErr != nil {
 			return nil, errors.WithStack(respErr)
 		}
@@ -266,6 +335,17 @@ func (resp *Response) Read(p []byte) (int, error) {
 
 // Close closes the response and discards any remaining body
 func (resp *Response) Close() error {
-	_, err := io.Copy(io.Discard, resp)
-	return err
+	return resp.close(true)
+}
+
+func (resp *Response) close(drain bool) error {
+	resp.closeOnce.Do(func() {
+		var readErr error
+		if drain {
+			_, readErr = io.Copy(io.Discard, resp)
+		}
+		closeErr := resp.httpBody.Close()
+		resp.closeErr = stderrors.Join(readErr, closeErr)
+	})
+	return resp.closeErr
 }

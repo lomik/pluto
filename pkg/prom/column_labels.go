@@ -19,7 +19,9 @@ func (t *typeColumnLabels) Read(r rb.Reader) (labels.Labels, error) {
 		return labels.New(), err
 	}
 
-	ss := make([]string, 0, int(n)*2)
+	// The count comes from an untrusted response. Allocating from it before
+	// reading the entries can exhaust memory even for a tiny malformed body.
+	ss := make([]string, 0)
 
 	for i := uint64(0); i < n; i++ {
 		k, err := rb.String.Read(r)

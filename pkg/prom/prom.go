@@ -143,8 +143,8 @@ func New(ctx context.Context, config *config.Config) (*Prom, error) {
 		false,      // h.options.EnableAdminAPI
 		promLogger, // logger
 		func(_ context.Context) api_v1.RulesRetriever { return rulesManager }, // FactoryRr
-		0,                           // h.options.RemoteReadSampleLimit
-		0,                           // h.options.RemoteReadConcurrencyLimit
+		0, // h.options.RemoteReadSampleLimit
+		config.Prometheus.RemoteReadConcurrencyLimit, // h.options.RemoteReadConcurrencyLimit
 		0,                           // h.options.RemoteReadBytesInFrame
 		false,                       // h.options.IsAgent
 		corsOrigin,                  // h.options.CORSOrigin

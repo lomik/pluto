@@ -18,7 +18,11 @@ import (
 
 // LabelNames returns all the unique label names present in the block in sorted order.
 func (q *Querier) LabelNames(ctx context.Context, hints *storage.LabelHints, matchers ...*labels.Matcher) ([]string, annotations.Annotations, error) {
-	seriesCfg, err := q.config.GetSeries(&config.EnvSeries{Limit: hints.Limit})
+	limit := 0
+	if hints != nil {
+		limit = hints.Limit
+	}
+	seriesCfg, err := q.config.GetSeries(&config.EnvSeries{Limit: limit})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -73,7 +77,7 @@ func (q *Querier) LabelNames(ctx context.Context, hints *storage.LabelHints, mat
 	}
 
 	if r.Err() != nil {
-		return nil, nil, err
+		return nil, nil, r.Err()
 	}
 
 	return rows, nil, nil

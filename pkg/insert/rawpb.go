@@ -1,6 +1,8 @@
 package insert
 
 import (
+	"errors"
+	"fmt"
 	"io"
 	"sync"
 	"unsafe"
@@ -10,7 +12,72 @@ import (
 	"github.com/pluto-metrics/rawpb"
 	"github.com/pluto-metrics/rowbinary"
 	"github.com/pluto-metrics/rowbinary/schema"
+	"google.golang.org/protobuf/encoding/protowire"
 )
+
+var errInvalidPayload = errors.New("invalid protobuf payload")
+
+type payloadMessage uint8
+
+const (
+	writeRequestMessage payloadMessage = iota
+	timeSeriesMessage
+	labelMessage
+	sampleMessage
+)
+
+// rawpb assumes valid tags and lengths. Validate untrusted wire data first,
+// including nested messages, so malformed input cannot panic in the parser.
+func validatePayload(raw []byte, message payloadMessage) error {
+	for len(raw) != 0 {
+		num, wireType, tagLen := protowire.ConsumeTag(raw)
+		if tagLen < 0 {
+			return protowire.ParseError(tagLen)
+		}
+		if !num.IsValid() {
+			return fmt.Errorf("invalid protobuf field number %d", num)
+		}
+		// rawpb does not support protobuf groups, even for unknown fields.
+		if wireType == protowire.StartGroupType || wireType == protowire.EndGroupType {
+			return fmt.Errorf("unsupported protobuf group at field %d", num)
+		}
+		var expected protowire.Type
+		var child payloadMessage
+		known := true
+		nested := false
+		switch {
+		case message == writeRequestMessage && num == 1:
+			expected, child, nested = protowire.BytesType, timeSeriesMessage, true
+		case message == timeSeriesMessage && num == 1:
+			expected, child, nested = protowire.BytesType, labelMessage, true
+		case message == timeSeriesMessage && num == 2:
+			expected, child, nested = protowire.BytesType, sampleMessage, true
+		case message == labelMessage && (num == 1 || num == 2):
+			expected = protowire.BytesType
+		case message == sampleMessage && num == 1:
+			expected = protowire.Fixed64Type
+		case message == sampleMessage && num == 2:
+			expected = protowire.VarintType
+		default:
+			known = false
+		}
+		if known && wireType != expected {
+			return fmt.Errorf("field %d has wire type %d, want %d", num, wireType, expected)
+		}
+		valueLen := protowire.ConsumeFieldValue(num, wireType, raw[tagLen:])
+		if valueLen < 0 {
+			return protowire.ParseError(valueLen)
+		}
+		if nested {
+			body, _ := protowire.ConsumeBytes(raw[tagLen : tagLen+valueLen])
+			if err := validatePayload(body, child); err != nil {
+				return err
+			}
+		}
+		raw = raw[tagLen+valueLen:]
+	}
+	return nil
+}
 
 var pbTimeseriesPool = sync.Pool{
 	New: func() interface{} { return &pbTimeseries{} },
@@ -66,6 +133,10 @@ func (p *pbTimeseries) sampleTimestamp(v int64) error {
 }
 
 func payloadToRowBinary(raw []byte, w io.Writer, h id.Provider) error {
+	if err := validatePayload(raw, writeRequestMessage); err != nil {
+		return fmt.Errorf("%w: %v", errInvalidPayload, err)
+	}
+
 	ws := schema.NewWriter(w).
 		Format(schema.RowBinaryWithNamesAndTypes).
 		Column("id", rowbinary.String).
@@ -81,6 +152,7 @@ func payloadToRowBinary(raw []byte, w io.Writer, h id.Provider) error {
 	ts := pbTimeseriesPool.Get().(*pbTimeseries)
 	defer pbTimeseriesPool.Put(ts)
 
+	var writeErr error
 	parser := rawpb.New(
 		rawpb.Message(1, rawpb.New(
 			rawpb.Begin(ts.begin),
@@ -108,6 +180,7 @@ func payloadToRowBinary(raw []byte, w io.Writer, h id.Provider) error {
 						ts.Samples[j].Timestamp,
 						ts.Samples[j].Value,
 					); err != nil {
+						writeErr = err
 						return err
 					}
 				}
@@ -118,7 +191,10 @@ func payloadToRowBinary(raw []byte, w io.Writer, h id.Provider) error {
 	)
 
 	if err := parser.Parse(raw); err != nil {
-		return err
+		if writeErr != nil {
+			return writeErr
+		}
+		return fmt.Errorf("%w: %v", errInvalidPayload, err)
 	}
 
 	return nil
