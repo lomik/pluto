@@ -1,6 +1,7 @@
 package query
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -226,6 +227,53 @@ func TestEarlyHTTPErrorStatus(t *testing.T) {
 		<-done
 		t.Fatal("real HTTP upload remained blocked after early response")
 	}
+}
+
+func TestEarlyHTTPOKPreservesFullDuplexUpload(t *testing.T) {
+	type receivedUpload struct {
+		body         []byte
+		err          error
+		major, minor int
+	}
+	received := make(chan receivedUpload, 1)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		controller := http.NewResponseController(w)
+		if err := controller.EnableFullDuplex(); err != nil {
+			t.Errorf("enable full duplex: %v", err)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		if err := controller.Flush(); err != nil {
+			t.Errorf("flush response headers: %v", err)
+			return
+		}
+		body, err := io.ReadAll(r.Body)
+		received <- receivedUpload{body: body, err: err, major: r.ProtoMajor, minor: r.ProtoMinor}
+		fmt.Fprint(w, "query result")
+	}))
+	defer ts.Close()
+
+	req, err := NewRequest(context.Background(), config.ClickHouse{DSN: ts.URL}, Opts{HTTPClient: ts.Client()})
+	require.NoError(t, err)
+	defer req.Close()
+	// Wait until the client has processed HTTP 200 before writing any body.
+	// Success headers must not close the upload side of a full-duplex request.
+	<-req.finished
+	payload := bytes.Repeat([]byte("x"), 2*1024*1024)
+	n, err := req.Write(payload)
+	require.NoError(t, err)
+	require.Equal(t, len(payload), n)
+	resp, err := req.Finish()
+	require.NoError(t, err)
+	result, err := io.ReadAll(resp)
+	require.NoError(t, err)
+	require.Equal(t, "query result", string(result))
+	got := <-received
+	require.NoError(t, got.err)
+	require.Equal(t, 1, got.major)
+	require.Equal(t, 1, got.minor)
+	require.Equal(t, payload, got.body)
+	require.NoError(t, resp.Close())
 }
 
 func TestCloseCancelsPendingUpload(t *testing.T) {

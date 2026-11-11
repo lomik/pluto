@@ -192,9 +192,8 @@ func NewRequest(ctx context.Context, cfg config.ClickHouse, opts Opts) (*Request
 		req.Lock()
 		req.resp = &Response{ctx: ctx, httpBody: httpResp.Body}
 		req.Unlock()
-		// A transport may return headers before it consumes the upload.
-		// Do not leave the pipe's writer blocked in that case.
-		req.reader.CloseWithError(io.ErrClosedPipe)
+		// HTTP 200 headers can arrive before the upload completes. Keep the
+		// pipe open until Finish or Close so full-duplex uploads can continue.
 	}()
 
 	return req, nil
