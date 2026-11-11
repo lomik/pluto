@@ -7,6 +7,8 @@ malformed input, and Prometheus tests use endpoints that do not query storage.
 
 Limits of these tests and the command:
 
+- Signal subprocess tests are skipped on Windows, where `os.Process.Signal`
+  cannot send SIGINT or SIGTERM. Listener error tests still run on Windows.
 - A successful remote write and a PromQL query require ClickHouse (or a
   substantial fake of its protocol) and are not part of these smoke tests.
 - `-dev` is parsed but has no effect on configuration loading. Its intended

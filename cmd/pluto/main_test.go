@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -210,6 +211,10 @@ func (b *safeBuffer) String() string {
 }
 
 func TestMainExitsOnSignal(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("os.Process.Signal does not support SIGINT or SIGTERM on Windows")
+	}
+
 	for _, sig := range []os.Signal{os.Interrupt, syscall.SIGTERM} {
 		t.Run(sig.String(), func(t *testing.T) {
 			testMainExitsOnSignal(t, sig)
@@ -305,8 +310,11 @@ func TestMainReportsOccupiedListenAddress(t *testing.T) {
 	if ctx.Err() != nil {
 		t.Fatalf("occupied listener hung: %v; output: %s", ctx.Err(), output)
 	}
-	if _, ok := err.(*exec.ExitError); !ok || !strings.Contains(string(output), "address already in use") {
-		t.Fatalf("occupied listener: got %v, output %s; want bind error and nonzero exit", err, output)
+	// net.OpError's listen prefix is portable; the underlying socket error text
+	// differs between Unix and Windows and can also depend on the system locale.
+	exitErr, ok := err.(*exec.ExitError)
+	if !ok || exitErr.ExitCode() != 1 || !strings.Contains(string(output), "listen tcp "+listener.Addr().String()+":") {
+		t.Fatalf("occupied listener: got %v, output %s; want listen error and exit code 1", err, output)
 	}
 }
 
