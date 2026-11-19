@@ -119,6 +119,12 @@ func (sit *seriesIterator) AtT() int64 {
 	return t
 }
 
+// AtST returns the current start timestamp. Start timestamps are not stored,
+// so it always returns 0.
+func (sit *seriesIterator) AtST() int64 {
+	return 0
+}
+
 // Next advances the iterator by one.
 func (sit *seriesIterator) Next() chunkenc.ValueType {
 	if sit.current < len(sit.series.samples)-1 {

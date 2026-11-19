@@ -38,6 +38,11 @@ func (s *storageImpl) Appender(ctx context.Context) storage.Appender {
 	return nil
 }
 
+// AppenderV2 ...
+func (s *storageImpl) AppenderV2(ctx context.Context) storage.AppenderV2 {
+	return nil
+}
+
 // StartTime ...
 func (s *storageImpl) StartTime() (int64, error) {
 	return 0, nil

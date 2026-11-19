@@ -32,3 +32,7 @@ func (s *storageImpl) Stats(statsByLabelName string, limit int) (*tsdb.Stats, er
 func (s *storageImpl) WALReplayStatus() (tsdb.WALReplayStatus, error) {
 	return tsdb.WALReplayStatus{}, nil
 }
+
+func (s *storageImpl) BlockMetas() ([]tsdb.BlockMeta, error) {
+	return nil, nil
+}

@@ -33,7 +33,7 @@ import (
 	"github.com/prometheus/prometheus/web/ui"
 
 	"github.com/lomik/pluto/pkg/config"
-	uiStatic "github.com/pluto-metrics/prometheus-ui-static"
+	uiStatic "github.com/lomik/prometheus-ui-static"
 	"github.com/prometheus/common/assets"
 )
 
@@ -98,7 +98,8 @@ func New(ctx context.Context, config *config.Config) (*Prom, error) {
 		&scrape.Options{},
 		promLogger,
 		func(s string) (*logging.JSONFileLogger, error) { return nil, nil },
-		storage,
+		storage, // appendable
+		nil,     // appendableV2
 		prometheus.DefaultRegisterer,
 	)
 	if err != nil {
@@ -106,12 +107,12 @@ func New(ctx context.Context, config *config.Config) (*Prom, error) {
 	}
 
 	rulesManager := rules.NewManager(&rules.ManagerOptions{
-		Logger:     promLogger,
-		Appendable: storage,
-		Queryable:  storage,
+		Logger:       promLogger,
+		AppendableV2: storage,
+		Queryable:    storage,
 	})
 
-	notifierManager := notifier.NewManager(&notifier.Options{}, promLogger)
+	notifierManager := notifier.NewManager(&notifier.Options{}, model.UTF8Validation, promLogger)
 
 	u, err := url.Parse(config.Prometheus.ExternalURL)
 	if err != nil {
@@ -141,6 +142,8 @@ func New(ctx context.Context, config *config.Config) (*Prom, error) {
 		storage,    // h.options.LocalStorage
 		"",         // h.options.TSDBDir
 		false,      // h.options.EnableAdminAPI
+		false,      // h.options.EnableSearch
+		0,          // h.options.MaxSearchLimit
 		promLogger, // logger
 		func(_ context.Context) api_v1.RulesRetriever { return rulesManager }, // FactoryRr
 		0, // h.options.RemoteReadSampleLimit
@@ -156,15 +159,23 @@ func New(ctx context.Context, config *config.Config) (*Prom, error) {
 		func() (<-chan notifications.Notification, func(), bool) {
 			return nil, nil, false
 		}, // h.options.NotificationsSub
-		&nopGatherer{}, // o.Gatherer
-		nil,            // o.Registerer
-		nil,            // nil
-		false,          // o.EnableRemoteWriteReceiver
-		nil,            // o.AcceptRemoteWriteProtoMsgs
-		false,          // o.EnableOTLPWriteReceiver
-		false,          // o.ConvertOTLPDelta
-		false,          // o.NativeOTLPDeltaIngestion
-		false,          // o.CTZeroIngestionEnabled
+		&nopGatherer{},                  // o.Gatherer
+		nil,                             // o.Registerer
+		nil,                             // nil
+		false,                           // o.EnableRemoteWriteReceiver
+		nil,                             // o.AcceptRemoteWriteProtoMsgs
+		false,                           // o.EnableOTLPWriteReceiver
+		false,                           // o.ConvertOTLPDelta
+		false,                           // o.NativeOTLPDeltaIngestion
+		config.Prometheus.LookbackDelta, // o.LookbackDelta
+		false,                           // o.EnableTypeAndUnitLabels
+		false,                           // o.AppendMetadata
+		nil,                             // o.OverrideErrorCode
+		nil,                             // o.FeatureRegistry
+		api_v1.OpenAPIOptions{},         // o.OpenAPIOptions
+		nil,                             // o.Parser (default parser)
+		false,                           // o.EnableQueryCost
+		time.Minute,                     // o.QueryTimeout (matches queryEngine Timeout)
 	)
 
 	if p.routePrefix != "/" {
