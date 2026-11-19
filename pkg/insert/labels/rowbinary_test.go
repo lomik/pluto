@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	rb "github.com/pluto-metrics/rowbinary"
+	rb "github.com/lomik/rowbinary"
 	"github.com/prometheus/prometheus/prompb"
 )
 
@@ -33,7 +33,8 @@ func TestColumnsRoundTrip(t *testing.T) {
 			for i, label := range tc.values {
 				wantProm[i] = prompb.Label{Name: string(label.Name), Value: string(label.Value)}
 			}
-			prom, err := ColumnPrompb.ReadAny(bufio.NewReader(bytes.NewReader(buf.Bytes())))
+			var prom []prompb.Label
+			err := ColumnPrompb.Scan(bufio.NewReader(bytes.NewReader(buf.Bytes())), &prom)
 			if err != nil || !reflect.DeepEqual(prom, wantProm) {
 				t.Fatalf("prompb read: %#v, %v; want %#v", prom, err, wantProm)
 			}
@@ -41,7 +42,8 @@ func TestColumnsRoundTrip(t *testing.T) {
 			if err := ColumnPrompb.WriteAny(rb.NewWriter(&buf), wantProm); err != nil {
 				t.Fatal(err)
 			}
-			got, err := ColumnBytes.ReadAny(bufio.NewReader(&buf))
+			var got []Bytes
+			err = ColumnBytes.Scan(bufio.NewReader(&buf), &got)
 			wantBytes := tc.values
 			if wantBytes == nil {
 				wantBytes = []Bytes{}
@@ -70,11 +72,13 @@ func TestColumnReadMalformed(t *testing.T) {
 		{"truncated large value", []byte{1, 1, 'a', 0x81, 0x20, 'b'}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := ColumnBytes.Read(bufio.NewReader(bytes.NewReader(tc.data))); err == nil {
-				t.Fatal("ColumnBytes.Read accepted truncated data")
+			var gotBytes []Bytes
+			if err := ColumnBytes.Scan(bufio.NewReader(bytes.NewReader(tc.data)), &gotBytes); err == nil {
+				t.Fatal("ColumnBytes.Scan accepted truncated data")
 			}
-			if _, err := ColumnPrompb.Read(bufio.NewReader(bytes.NewReader(tc.data))); err == nil {
-				t.Fatal("ColumnPrompb.Read accepted truncated data")
+			var gotProm []prompb.Label
+			if err := ColumnPrompb.Scan(bufio.NewReader(bytes.NewReader(tc.data)), &gotProm); err == nil {
+				t.Fatal("ColumnPrompb.Scan accepted truncated data")
 			}
 		})
 	}

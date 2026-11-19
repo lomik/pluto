@@ -18,8 +18,7 @@ import (
 	"github.com/lomik/pluto/pkg/lg"
 	"github.com/lomik/pluto/pkg/query"
 	"github.com/lomik/pluto/pkg/sql"
-	"github.com/pluto-metrics/rowbinary"
-	"github.com/pluto-metrics/rowbinary/schema"
+	"github.com/lomik/rowbinary"
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/storage"
 )
@@ -130,12 +129,13 @@ func (q *Querier) Select(ctx context.Context, sortSeries bool, selectHints *stor
 
 	idsWriterBuf := bufio.NewWriter(idsWriter)
 
-	schemaWriter := schema.NewWriter(idsWriterBuf).
-		Format(schema.RowBinary).
-		Column("id", rowbinary.String)
+	schemaWriter := rowbinary.NewFormatWriter(idsWriterBuf,
+		rowbinary.RowBinary,
+		rowbinary.C("id", rowbinary.String),
+	)
 
 	for k := range seriesMap {
-		if err = schemaWriter.WriteValues(k); err != nil {
+		if err = rowbinary.Write(schemaWriter, rowbinary.String, k); err != nil {
 			return createErr(err)
 		}
 	}
@@ -191,16 +191,17 @@ func (q *Querier) Select(ctx context.Context, sortSeries bool, selectHints *stor
 		dataMap[k] = d
 	}
 
-	r := schema.NewReader(bufio.NewReader(chResponse)).
-		Format(schema.RowBinary).
-		Column(unhash.ColumnType()) // id
-
+	var timestampType rowbinary.Any = rowbinary.Int64 // timestamp int64 with ms
 	if samplesCfg.SamplesTimestampUInt32 {
-		r = r.Column(rowbinary.UInt32) // timestamp uint32
-	} else {
-		r = r.Column(rowbinary.Int64) // timestamp int64 with ms
+		timestampType = rowbinary.UInt32 // timestamp uint32
 	}
-	r = r.Column(rowbinary.Float64) // value
+
+	r := rowbinary.NewFormatReader(bufio.NewReader(chResponse),
+		rowbinary.RowBinary,
+		rowbinary.C("id", unhash.ColumnType()),
+		rowbinary.C("timestamp", timestampType),
+		rowbinary.C("value", rowbinary.Float64),
+	)
 
 	var id string
 	var timestamp int64
@@ -213,15 +214,15 @@ func (q *Querier) Select(ctx context.Context, sortSeries bool, selectHints *stor
 			return errorSeriesSet(err)
 		}
 		if samplesCfg.SamplesTimestampUInt32 {
-			timestamp32, err = schema.Read(r, rowbinary.UInt32)
+			timestamp32, err = rbRead(r, rowbinary.UInt32)
 			timestamp = int64(timestamp32) * 1000
 		} else {
-			timestamp, err = schema.Read(r, rowbinary.Int64)
+			timestamp, err = rbRead(r, rowbinary.Int64)
 		}
 		if err != nil {
 			return errorSeriesSet(err)
 		}
-		value, err = schema.Read(r, rowbinary.Float64)
+		value, err = rbRead(r, rowbinary.Float64)
 		if err != nil {
 			return errorSeriesSet(err)
 		}

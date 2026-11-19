@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/OneOfOne/xxhash"
-	"github.com/pluto-metrics/rowbinary"
+	"github.com/lomik/rowbinary"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -57,7 +57,8 @@ func TestClickhouseHash(t *testing.T) {
 			assert.NoError(err)
 
 			r := bytes.NewReader(body)
-			value, err := tt.tp.ReadAny(r)
+			var value any
+			err = tt.tp.ScanAny(rowbinary.NewReader(r), &value)
 			if assert.NoError(err) {
 				assert.Equal(tt.want, value)
 			}

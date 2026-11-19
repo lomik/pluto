@@ -8,8 +8,7 @@ import (
 	"github.com/lomik/pluto/pkg/config"
 	"github.com/lomik/pluto/pkg/lg"
 	"github.com/lomik/pluto/pkg/sql"
-	"github.com/pluto-metrics/rowbinary"
-	"github.com/pluto-metrics/rowbinary/schema"
+	"github.com/lomik/rowbinary"
 	"github.com/prometheus/prometheus/storage"
 	"github.com/prometheus/prometheus/util/annotations"
 
@@ -63,13 +62,14 @@ func (q *Querier) LabelNames(ctx context.Context, hints *storage.LabelHints, mat
 	}
 	defer chResponse.Close()
 
-	r := schema.NewReader(bufio.NewReader(chResponse)).
-		Format(schema.RowBinary).
-		Column(rowbinary.String)
+	r := rowbinary.NewFormatReader(bufio.NewReader(chResponse),
+		rowbinary.RowBinary,
+		rowbinary.C("value", rowbinary.String),
+	)
 
 	rows := []string{}
 	for r.Next() {
-		row, err := schema.Read(r, rowbinary.String)
+		row, err := rbRead(r, rowbinary.String)
 		if err != nil {
 			return nil, nil, err
 		}

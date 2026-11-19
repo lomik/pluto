@@ -9,8 +9,7 @@ import (
 	"github.com/lomik/pluto/pkg/config"
 	"github.com/lomik/pluto/pkg/lg"
 	"github.com/lomik/pluto/pkg/sql"
-	"github.com/pluto-metrics/rowbinary"
-	"github.com/pluto-metrics/rowbinary/schema"
+	"github.com/lomik/rowbinary"
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/storage"
 )
@@ -57,19 +56,20 @@ func (q *Querier) selectSeries(ctx context.Context, selectHints *storage.SelectH
 	}
 	defer chResponse.Close()
 
-	r := schema.NewReader(bufio.NewReader(chResponse)).
-		Format(schema.RowBinary).
-		Column(rowbinary.String). // id
-		Column(ColumnLabels)      // labels
+	r := rowbinary.NewFormatReader(bufio.NewReader(chResponse),
+		rowbinary.RowBinary,
+		rowbinary.C("id", rowbinary.String),
+		rowbinary.C("labels", ColumnLabels),
+	)
 
 	ret := make(map[string]labels.Labels)
 
 	for r.Next() {
-		id, err := schema.Read(r, rowbinary.String)
+		id, err := rbRead(r, rowbinary.String)
 		if err != nil {
 			return nil, err
 		}
-		lb, err := schema.Read(r, ColumnLabels)
+		lb, err := rbRead(r, ColumnLabels)
 		if err != nil {
 			return nil, err
 		}

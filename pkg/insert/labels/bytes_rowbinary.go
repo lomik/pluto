@@ -1,13 +1,12 @@
 package labels
 
 import (
-	"errors"
 	"unsafe"
 
-	rb "github.com/pluto-metrics/rowbinary"
+	rb "github.com/lomik/rowbinary"
 )
 
-var ColumnBytes rb.Type[[]Bytes] = &typeColumnBytes{}
+var ColumnBytes rb.Type[[]Bytes] = rb.MakeTypeWrapAny[[]Bytes](&typeColumnBytes{})
 
 type typeColumnBytes struct {
 }
@@ -16,42 +15,43 @@ func unsafeBytesToString(b []byte) string {
 	return unsafe.String(unsafe.SliceData(b), len(b))
 }
 
-// Read implements rb.Type.
-func (t *typeColumnBytes) Read(r rb.Reader) ([]Bytes, error) {
-	n, err := rb.UVarint.Read(r)
+// Scan implements rb.BaseType.
+func (t *typeColumnBytes) Scan(r rb.Reader, dst *[]Bytes) error {
+	n, err := rb.VarintRead(r)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	ret := make([]Bytes, 0)
 	for i := uint64(0); i < n; i++ {
 		k, err := readString(r)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		v, err := readString(r)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		ret = append(ret, Bytes{Name: []byte(k), Value: []byte(v)})
 	}
 
-	return ret, nil
+	*dst = ret
+	return nil
 }
 
-// ReadAny implements rb.Type.
-func (t *typeColumnBytes) ReadAny(r rb.Reader) (any, error) {
-	return t.Read(r)
+// Binary implements rb.BaseType.
+func (t *typeColumnBytes) Binary() []byte {
+	return rb.Map(rb.String, rb.String).Binary()
 }
 
-// String implements rb.Type.
+// String implements rb.BaseType.
 func (t *typeColumnBytes) String() string {
 	return "Map(String, String)"
 }
 
-// Write implements rb.Type.
+// Write implements rb.BaseType.
 func (t *typeColumnBytes) Write(w rb.Writer, value []Bytes) error {
-	err := rb.UVarint.Write(w, uint64(len(value)))
+	err := rb.VarintWrite(w, uint64(len(value)))
 	if err != nil {
 		return err
 	}
@@ -68,13 +68,4 @@ func (t *typeColumnBytes) Write(w rb.Writer, value []Bytes) error {
 	}
 
 	return nil
-}
-
-// WriteAny implements rb.Type.
-func (t *typeColumnBytes) WriteAny(w rb.Writer, v any) error {
-	value, ok := v.([]Bytes)
-	if !ok {
-		return errors.New("unexpected type")
-	}
-	return t.Write(w, value)
 }

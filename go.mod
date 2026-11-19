@@ -1,6 +1,6 @@
 module github.com/lomik/pluto
 
-go 1.24.0
+go 1.25.0
 
 require (
 	github.com/OneOfOne/xxhash v1.2.8
@@ -11,10 +11,10 @@ require (
 	github.com/jinzhu/configor v1.2.2
 	github.com/jinzhu/copier v0.4.0
 	github.com/k0kubun/pp v3.0.1+incompatible
+	github.com/lomik/rawpb v1.3.0
+	github.com/lomik/rowbinary v0.0.2
 	github.com/pkg/errors v0.9.1
 	github.com/pluto-metrics/prometheus-ui-static v0.305.0
-	github.com/pluto-metrics/rawpb v0.2.0
-	github.com/pluto-metrics/rowbinary v0.0.0-20241016072233-3f4c44e49f41
 	github.com/prometheus/client_golang v1.22.0
 	github.com/prometheus/client_model v0.6.2
 	github.com/prometheus/common v0.65.0
@@ -22,6 +22,7 @@ require (
 	github.com/prometheus/prometheus v0.305.0
 	github.com/spf13/cast v1.7.0
 	github.com/stretchr/testify v1.10.0
+	google.golang.org/protobuf v1.36.6
 )
 
 require (
@@ -154,7 +155,6 @@ require (
 	google.golang.org/api v0.238.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250603155806-513f23925822 // indirect
 	google.golang.org/grpc v1.73.0 // indirect
-	google.golang.org/protobuf v1.36.6 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	k8s.io/apimachinery v0.32.3 // indirect

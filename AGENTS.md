@@ -9,7 +9,7 @@ and the `.gitignore` entry for `.codegraph/` were committed after the merge, in
 
 ## Purpose and architecture
 
-- Pluto is a Go 1.24 module (`github.com/lomik/pluto`) implementing a Prometheus
+- Pluto is a Go 1.25 module (`github.com/lomik/pluto`) implementing a Prometheus
   remote-write receiver and Prometheus-compatible read/UI endpoints on top of
   ClickHouse. `cmd/pluto/main.go` is the executable entry point.
 - `pkg/config` loads YAML with `configor`, validates it, compiles `expr` `when`
@@ -58,7 +58,10 @@ go test -race ./...
 go vet -stdmethods=false ./...
 ```
 
-- `go.mod` requires Go 1.24.0. The audit was run locally on Go 1.27.1 on
+- `go.mod` requires Go 1.25.0 (raised from 1.24.0 by `github.com/lomik/rawpb`
+  v1.3.0; `rawpb` and `rowbinary` moved from `github.com/pluto-metrics/*` to
+  `github.com/lomik/*`, and rowbinary v0.0.2 folded the `schema` package into
+  the root: `FormatReader`/`FormatWriter`, `Scan` instead of `Read`). The audit was run locally on Go 1.27.1 on
   macOS/arm64. `go vet ./...` on the baseline reports a `stdmethods` warning
   about `pkg/prom/series_set.go`'s `Seek(int64) chunkenc.ValueType`; that
   signature is required by the upstream Prometheus iterator interface.

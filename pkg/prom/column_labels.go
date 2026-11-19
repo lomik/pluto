@@ -1,22 +1,20 @@
 package prom
 
 import (
-	"errors"
-
-	rb "github.com/pluto-metrics/rowbinary"
+	rb "github.com/lomik/rowbinary"
 	"github.com/prometheus/prometheus/model/labels"
 )
 
-var ColumnLabels rb.Type[labels.Labels] = &typeColumnLabels{}
+var ColumnLabels rb.Type[labels.Labels] = rb.MakeTypeWrapAny[labels.Labels](&typeColumnLabels{})
 
 type typeColumnLabels struct {
 }
 
-// Read implements rb.Type.
-func (t *typeColumnLabels) Read(r rb.Reader) (labels.Labels, error) {
-	n, err := rb.UVarint.Read(r)
+// Scan implements rb.BaseType.
+func (t *typeColumnLabels) Scan(r rb.Reader, dst *labels.Labels) error {
+	n, err := rb.VarintRead(r)
 	if err != nil {
-		return labels.New(), err
+		return err
 	}
 
 	// The count comes from an untrusted response. Allocating from it before
@@ -24,35 +22,36 @@ func (t *typeColumnLabels) Read(r rb.Reader) (labels.Labels, error) {
 	ss := make([]string, 0)
 
 	for i := uint64(0); i < n; i++ {
-		k, err := rb.String.Read(r)
-		if err != nil {
-			return labels.New(), err
+		var k string
+		if err := rb.String.Scan(r, &k); err != nil {
+			return err
 		}
 		ss = append(ss, k)
 
-		v, err := rb.String.Read(r)
-		if err != nil {
-			return labels.New(), err
+		var v string
+		if err := rb.String.Scan(r, &v); err != nil {
+			return err
 		}
 		ss = append(ss, v)
 	}
 
-	return labels.FromStrings(ss...), nil
+	*dst = labels.FromStrings(ss...)
+	return nil
 }
 
-// ReadAny implements rb.Type.
-func (t *typeColumnLabels) ReadAny(r rb.Reader) (any, error) {
-	return t.Read(r)
+// Binary implements rb.BaseType.
+func (t *typeColumnLabels) Binary() []byte {
+	return rb.Map(rb.String, rb.String).Binary()
 }
 
-// String implements rb.Type.
+// String implements rb.BaseType.
 func (t *typeColumnLabels) String() string {
 	return "Map(String, String)"
 }
 
-// Write implements rb.Type.
+// Write implements rb.BaseType.
 func (t *typeColumnLabels) Write(w rb.Writer, value labels.Labels) error {
-	err := rb.UVarint.Write(w, uint64(value.Len()))
+	err := rb.VarintWrite(w, uint64(value.Len()))
 	if err != nil {
 		return err
 	}
@@ -69,13 +68,4 @@ func (t *typeColumnLabels) Write(w rb.Writer, value labels.Labels) error {
 	})
 
 	return err
-}
-
-// WriteAny implements rb.Type.
-func (t *typeColumnLabels) WriteAny(w rb.Writer, v any) error {
-	value, ok := v.(labels.Labels)
-	if !ok {
-		return errors.New("unexpected type")
-	}
-	return t.Write(w, value)
 }

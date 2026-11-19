@@ -4,11 +4,11 @@ import (
 	"encoding/binary"
 	"io"
 
-	rb "github.com/pluto-metrics/rowbinary"
+	rb "github.com/lomik/rowbinary"
 )
 
-// rb.String.Read allocates the entire claimed length before reading data.
-// A corrupted RowBinary length can therefore panic or exhaust memory.
+// readString grows its buffer only as data arrives, never from the untrusted
+// declared length, so a corrupted RowBinary length cannot exhaust memory.
 func readString(r rb.Reader) (string, error) {
 	n, err := binary.ReadUvarint(r)
 	if err != nil {

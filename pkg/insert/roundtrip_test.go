@@ -10,8 +10,7 @@ import (
 
 	"github.com/lomik/pluto/pkg/insert/id"
 	"github.com/lomik/pluto/pkg/insert/labels"
-	"github.com/pluto-metrics/rowbinary"
-	"github.com/pluto-metrics/rowbinary/schema"
+	"github.com/lomik/rowbinary"
 	"github.com/prometheus/prometheus/prompb"
 )
 
@@ -34,49 +33,48 @@ func testWriteRequest(t *testing.T, series ...prompb.TimeSeries) []byte {
 func decodeInsertRows(t *testing.T, body []byte) []insertRow {
 	t.Helper()
 	reader := bufio.NewReader(bytes.NewReader(body))
-	count, err := rowbinary.UVarint.Read(reader)
+	count, err := rowbinary.VarintRead(reader)
 	if err != nil || count != 5 {
 		t.Fatalf("column count: %d, %v", count, err)
 	}
 	for _, name := range []string{"id", "name", "labels", "timestamp", "value"} {
-		got, err := rowbinary.String.Read(reader)
+		var got string
+		err := rowbinary.String.Scan(reader, &got)
 		if err != nil || got != name {
 			t.Fatalf("column name: %q, %v; want %q", got, err, name)
 		}
 	}
 	for _, typ := range []string{"String", "String", "Map(String, String)", "Int64", "Float64"} {
-		got, err := rowbinary.String.Read(reader)
+		var got string
+		err := rowbinary.String.Scan(reader, &got)
 		if err != nil || got != typ {
 			t.Fatalf("column type: %q, %v; want %q", got, err, typ)
 		}
 	}
 
-	r := schema.NewReader(reader).Format(schema.RowBinary).
-		Column(rowbinary.String).Column(rowbinary.String).Column(labels.ColumnBytes).
-		Column(rowbinary.Int64).Column(rowbinary.Float64)
+	r := rowbinary.NewFormatReader(reader, rowbinary.RowBinary,
+		rowbinary.C("id", rowbinary.String), rowbinary.C("name", rowbinary.String),
+		rowbinary.C("labels", labels.ColumnBytes),
+		rowbinary.C("timestamp", rowbinary.Int64), rowbinary.C("value", rowbinary.Float64))
 	var rows []insertRow
 	for r.Next() {
-		idValue, err := schema.Read(r, rowbinary.String)
-		if err != nil {
+		var row insertRow
+		if err := rowbinary.Scan(r, rowbinary.String, &row.id); err != nil {
 			t.Fatal(err)
 		}
-		name, err := schema.Read(r, rowbinary.String)
-		if err != nil {
+		if err := rowbinary.Scan(r, rowbinary.String, &row.name); err != nil {
 			t.Fatal(err)
 		}
-		ll, err := schema.Read(r, labels.ColumnBytes)
-		if err != nil {
+		if err := rowbinary.Scan(r, labels.ColumnBytes, &row.labels); err != nil {
 			t.Fatal(err)
 		}
-		timestamp, err := schema.Read(r, rowbinary.Int64)
-		if err != nil {
+		if err := rowbinary.Scan(r, rowbinary.Int64, &row.time); err != nil {
 			t.Fatal(err)
 		}
-		value, err := schema.Read(r, rowbinary.Float64)
-		if err != nil {
+		if err := rowbinary.Scan(r, rowbinary.Float64, &row.value); err != nil {
 			t.Fatal(err)
 		}
-		rows = append(rows, insertRow{idValue, name, ll, timestamp, value})
+		rows = append(rows, row)
 	}
 	if err := r.Err(); err != nil {
 		t.Fatal(err)

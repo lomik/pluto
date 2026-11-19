@@ -9,9 +9,8 @@ import (
 
 	"github.com/lomik/pluto/pkg/insert/id"
 	"github.com/lomik/pluto/pkg/insert/labels"
-	"github.com/pluto-metrics/rawpb"
-	"github.com/pluto-metrics/rowbinary"
-	"github.com/pluto-metrics/rowbinary/schema"
+	"github.com/lomik/rawpb"
+	"github.com/lomik/rowbinary"
 	"google.golang.org/protobuf/encoding/protowire"
 )
 
@@ -137,13 +136,14 @@ func payloadToRowBinary(raw []byte, w io.Writer, h id.Provider) error {
 		return fmt.Errorf("%w: %v", errInvalidPayload, err)
 	}
 
-	ws := schema.NewWriter(w).
-		Format(schema.RowBinaryWithNamesAndTypes).
-		Column("id", rowbinary.String).
-		Column("name", rowbinary.String).
-		Column("labels", labels.ColumnBytes).
-		Column("timestamp", rowbinary.Int64).
-		Column("value", rowbinary.Float64)
+	ws := rowbinary.NewFormatWriter(w,
+		rowbinary.RowBinaryWithNamesAndTypes,
+		rowbinary.C("id", rowbinary.String),
+		rowbinary.C("name", rowbinary.String),
+		rowbinary.C("labels", labels.ColumnBytes),
+		rowbinary.C("timestamp", rowbinary.Int64),
+		rowbinary.C("value", rowbinary.Float64),
+	)
 
 	if err := ws.WriteHeader(); err != nil {
 		return err
@@ -173,7 +173,7 @@ func payloadToRowBinary(raw []byte, w io.Writer, h id.Provider) error {
 				h.Update(ts.Labels)
 
 				for j := 0; j < len(ts.Samples); j++ {
-					if err := ws.WriteValues(
+					if err := ws.WriteAny(
 						unsafeBytesToString(h.ID()),
 						unsafeBytesToString(h.Name()),
 						ts.Labels,

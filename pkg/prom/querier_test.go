@@ -18,8 +18,7 @@ import (
 	"github.com/OneOfOne/xxhash"
 	"github.com/lomik/pluto/pkg/config"
 	"github.com/lomik/pluto/pkg/sql"
-	"github.com/pluto-metrics/rowbinary"
-	"github.com/pluto-metrics/rowbinary/schema"
+	"github.com/lomik/rowbinary"
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/storage"
 	"github.com/prometheus/prometheus/tsdb/chunkenc"
@@ -85,12 +84,13 @@ func fakeQuerier(t *testing.T, respond func(clickhouseCall) (int, []byte)) (*Que
 func binaryRows(t *testing.T, columns []rowbinary.Any, rows ...[]any) []byte {
 	t.Helper()
 	var buf bytes.Buffer
-	w := schema.NewWriter(&buf).Format(schema.RowBinary)
+	opts := []rowbinary.FormatOption{rowbinary.RowBinary}
 	for i, col := range columns {
-		w.Column(fmt.Sprintf("col%d", i), col)
+		opts = append(opts, rowbinary.C(fmt.Sprintf("col%d", i), col))
 	}
+	w := rowbinary.NewFormatWriter(&buf, opts...)
 	for _, row := range rows {
-		if err := w.WriteValues(row...); err != nil {
+		if err := w.WriteAny(row...); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -184,8 +184,8 @@ func TestSelectSampleRowsAndMultipartIDs(t *testing.T) {
 	seriesResponse := binaryRows(t, []rowbinary.Any{rowbinary.String, ColumnLabels},
 		[]any{"id-a", lbA}, []any{"id-a2", lbA}, []any{"id-b", lbB})
 	var sampleBuf bytes.Buffer
-	w := schema.NewWriter(&sampleBuf).Format(schema.RowBinary).
-		Column("hash", rowbinary.UInt32).Column("timestamp", rowbinary.Int64).Column("value", rowbinary.Float64)
+	w := rowbinary.NewFormatWriter(&sampleBuf, rowbinary.RowBinary,
+		rowbinary.C("hash", rowbinary.UInt32), rowbinary.C("timestamp", rowbinary.Int64), rowbinary.C("value", rowbinary.Float64))
 	for _, s := range []struct {
 		id string
 		ts int64
@@ -193,7 +193,7 @@ func TestSelectSampleRowsAndMultipartIDs(t *testing.T) {
 	}{
 		{"id-a", 4000, 4}, {"id-b", 3000, 3}, {"id-a2", 2000, 2}, {"id-a", 1000, 1},
 	} {
-		if err := w.WriteValues(xxhash.ChecksumString32(s.id), s.ts, s.v); err != nil {
+		if err := w.WriteAny(xxhash.ChecksumString32(s.id), s.ts, s.v); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -240,10 +240,10 @@ func TestSelectSampleRowsAndMultipartIDs(t *testing.T) {
 			t.Errorf("%s = %q, want %q", field, fields[field], want)
 		}
 	}
-	reader := schema.NewReader(bufio.NewReader(bytes.NewReader(fields["ids"]))).Format(schema.RowBinary).Column(rowbinary.String)
+	reader := rowbinary.NewFormatReader(bufio.NewReader(bytes.NewReader(fields["ids"])), rowbinary.RowBinary, rowbinary.C("id", rowbinary.String))
 	ids := map[string]bool{}
 	for reader.Next() {
-		id, err := schema.Read(reader, rowbinary.String)
+		id, err := rbRead(reader, rowbinary.String)
 		if err != nil {
 			t.Fatal(err)
 		}
