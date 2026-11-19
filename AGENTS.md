@@ -2,9 +2,10 @@
 
 This file records what was learned during the project audit. **Check the current
 branch before applying any advice below.** The eight audit branches were merged
-into `renew` at `04ff2f5` with the user's approval. The separate `audit/*`
-worktrees remain available. The staged `.gitignore` change in `renew` is user
-work; leave it alone. This `AGENTS.md` is also not part of the merge commit.
+into `renew` at `04ff2f5` with the user's approval. The `audit/*` branches
+are kept for provenance; their worktrees have been removed. This `AGENTS.md`
+and the `.gitignore` entry for `.codegraph/` were committed after the merge, in
+`de12423`.
 
 ## Purpose and architecture
 
