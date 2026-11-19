@@ -117,18 +117,20 @@ Windows-specific test assertions in `cmd`/`listen`, and a streamed remote-read
 panic in `prom`. The final HEADs above include those follow-ups. After the
 user authorized merging, the combined tree passed the full race suite and vet.
 
-## Known limitations and decisions still needed
+## Accepted risks and outstanding decisions
 
 - **Persisted series-ID format:** `NameWithSha256` hashes sorted
   `name=value` pairs joined with `&` without escaping/length framing.
   `{__name__="m", a="b&c=d"}` and `{__name__="m", a="b", c="d"}` produce
   the same ID, mixing distinct series. This is an ambiguous encoding, not a
-  cryptographic SHA-256 collision. The merged audit documents and tests it
-  but does not change persisted IDs: a versioned format, migration/backfill,
-  and a strategy for already-mixed samples are needed. Duplicate label names can
-  also lead to order-dependent IDs. The receiver constructs the SHA-256
-  provider directly, even though `id_func` is exposed in configuration;
-  currently no other valid base provider is configured.
+  cryptographic SHA-256 collision. **Accepted risk: the user decided to leave
+  the existing ID algorithm unchanged because this is unlikely in real-world
+  use. Do not reopen the format, escaping, or migration discussion unless an
+  actual collision is observed or the user explicitly requests it.** Keep the
+  reproducing test and documentation. Duplicate label names can also lead to
+  order-dependent IDs. The receiver constructs the SHA-256 provider directly,
+  even though `id_func` is exposed in configuration; currently no other valid
+  base provider is configured.
 - **Resource limits:** the receiver reads the entire compressed request and
   Snappy-decodes without compressed/decoded-size limits; a large payload or
   compression bomb can exhaust memory. Wire validation is not a size limit.
